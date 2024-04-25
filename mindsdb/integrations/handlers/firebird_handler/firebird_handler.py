@@ -5,6 +5,7 @@ import pandas as pd
 import fdb
 
 from mindsdb_sql import parse_sql
+from sqlalchemy_firebird.base import FBDialect
 from mindsdb_sql.render.sqlalchemy_render import SqlalchemyRender
 from mindsdb.integrations.libs.base import DatabaseHandler
 
@@ -18,6 +19,7 @@ from mindsdb.integrations.libs.response import (
 )
 from mindsdb.integrations.libs.const import HANDLER_CONNECTION_ARG_TYPE as ARG_TYPE
 
+logger = log.getLogger(__name__)
 
 class FirebirdHandler(DatabaseHandler):
     """
@@ -93,7 +95,7 @@ class FirebirdHandler(DatabaseHandler):
             self.connect()
             response.success = True
         except Exception as e:
-            log.logger.error(f'Error connecting to Firebird {self.connection_data["database"]}, {e}!')
+            logger.error(f'Error connecting to Firebird {self.connection_data["database"]}, {e}!')
             response.error_message = str(e)
         finally:
             if response.success is True and need_to_close:
@@ -132,7 +134,7 @@ class FirebirdHandler(DatabaseHandler):
                 connection.commit()
                 response = Response(RESPONSE_TYPE.OK)
         except Exception as e:
-            log.logger.error(f'Error running query: {query} on {self.connection_data["database"]}!')
+            logger.error(f'Error running query: {query} on {self.connection_data["database"]}!')
             response = Response(
                 RESPONSE_TYPE.ERROR,
                 error_message=str(e)
@@ -153,7 +155,7 @@ class FirebirdHandler(DatabaseHandler):
         Returns:
             HandlerResponse
         """
-        renderer = SqlalchemyRender('firebird')
+        renderer = SqlalchemyRender(FBDialect)
         query_str = renderer.get_string(query, with_failback=True)
         return self.native_query(query_str)
 

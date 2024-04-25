@@ -1,11 +1,15 @@
 import pandas as pd
+from mindsdb_sql.parser import ast
 from typing import Text, List, Dict, Tuple
 
 from mindsdb_sql.parser import ast
-from mindsdb.integrations.utilities.sql_utils import extract_comparison_conditions
+from mindsdb.integrations.utilities.sql_utils import sort_dataframe
+
+from mindsdb.integrations.handlers.utilities.query_utilities.base_query_utilities import BaseQueryParser
+from mindsdb.integrations.handlers.utilities.query_utilities.base_query_utilities import BaseQueryExecutor
 
 
-class SELECTQueryParser:
+class SELECTQueryParser(BaseQueryParser):
     """
     Parses a SELECT query into its component parts.
 
@@ -19,7 +23,7 @@ class SELECTQueryParser:
         List of columns in the table.
     """
     def __init__(self, query: ast.Select, table: Text, columns: List[Text]):
-        self.query = query
+        super().__init__(query)
         self.table = table
         self.columns = columns
 
@@ -50,37 +54,14 @@ class SELECTQueryParser:
 
         return selected_columns
 
-    def parse_where_clause(self) -> List[List[Text]]:
-        """
-        Parses the WHERE clause of the query.
-        """
-        where_conditions = extract_comparison_conditions(self.query.where)
-        return where_conditions
-
     def parse_order_by_clause(self) -> Dict[Text, List[Text]]:
         """
         Parses the ORDER BY clause of the query.
         """
-        order_by_conditions = {}
         if self.query.order_by and len(self.query.order_by) > 0:
-            order_by_conditions["columns"] = []
-            order_by_conditions["ascending"] = []
-
-            for an_order in self.query.order_by:
-                if an_order.field.parts[0] == self.table:
-                    if an_order.field.parts[1] in self.columns:
-                        order_by_conditions["columns"].append(an_order.field.parts[1])
-
-                        if an_order.direction == "ASC":
-                            order_by_conditions["ascending"].append(True)
-                        else:
-                            order_by_conditions["ascending"].append(False)
-                    else:
-                        raise ValueError(
-                            f"Order by unknown column {an_order.field.parts[1]}"
-                        )
-
-        return order_by_conditions
+            return self.query.order_by
+        else:
+            return []
 
     def parse_limit_clause(self) -> int:
         """
@@ -94,7 +75,7 @@ class SELECTQueryParser:
         return result_limit
 
 
-class SELECTQueryExecutor:
+class SELECTQueryExecutor(BaseQueryExecutor):
     """
     Executes a SELECT query.
 
@@ -111,10 +92,9 @@ class SELECTQueryExecutor:
     result_limit : int
         Number of results to return.
     """
-    def __init__(self, df: pd.DataFrame, selected_columns: List[Text], where_conditions: List[List[Text]], order_by_conditions: Dict[Text, List[Text]], result_limit: int = None):
-        self.df = df
+    def __init__(self, df: pd.DataFrame, selected_columns: List[Text], where_conditions: List[List[Text]], order_by_conditions: List, result_limit: int = None):
+        super().__init__(df, where_conditions)
         self.selected_columns = selected_columns
-        self.where_conditions = where_conditions
         self.order_by_conditions = order_by_conditions
         self.result_limit = result_limit
 
@@ -141,28 +121,11 @@ class SELECTQueryExecutor:
         else:
             self.df = self.df[self.selected_columns]
 
-    def execute_where_clause(self):
-        """
-        Execute the where clause of the query.
-        """
-        if len(self.where_conditions) > 0:
-            for condition in self.where_conditions:
-                column = condition[1]
-                operator = '==' if condition[0] == '=' else condition[0]
-                value = f"'{condition[2]}'" if type(condition[2]) == str else condition[2]
-
-                query = f"{column} {operator} {value}"
-                self.df.query(query, inplace=True)
-
     def execute_order_by_clause(self):
         """
         Execute the order by clause of the query.
         """
-        if len(self.order_by_conditions.get("columns", [])) > 0:
-            self.df = self.df.sort_values(
-                by=self.order_by_conditions["columns"],
-                ascending=self.order_by_conditions["ascending"],
-            )
+        self.df = sort_dataframe(self.df, self.order_by_conditions)
 
     def execute_limit_clause(self):
         """

@@ -15,6 +15,7 @@ from .utils.surreal_get_info import *
 import pysurrealdb as surreal
 import pandas as pd
 
+logger = log.getLogger(__name__)
 
 class SurrealDBHandler(DatabaseHandler):
     """
@@ -62,7 +63,7 @@ class SurrealDBHandler(DatabaseHandler):
             )
             self.is_connected = True
         except Exception as e:
-            log.logger.error(f"Error while connecting to SurrealDB, {e}")
+            logger.error(f"Error while connecting to SurrealDB, {e}")
 
         return self.connection
 
@@ -78,7 +79,7 @@ class SurrealDBHandler(DatabaseHandler):
             self.connect()
             response_code.success = True
         except Exception as e:
-            log.logger.error(f'Error connecting to SurrealDB, {e}!')
+            logger.error(f'Error connecting to SurrealDB, {e}!')
             response_code.error_message = str(e)
         finally:
             if response_code.success is True and need_to_close:
@@ -98,7 +99,7 @@ class SurrealDBHandler(DatabaseHandler):
             self.connection.close()
             self.is_connected = False
         except Exception as e:
-            log.logger.error(f"Error while disconnecting to SurrealDB, {e}")
+            logger.error(f"Error while disconnecting to SurrealDB, {e}")
 
         return
 
@@ -127,7 +128,7 @@ class SurrealDBHandler(DatabaseHandler):
             else:
                 response = Response(RESPONSE_TYPE.OK)
         except Exception as e:
-            log.logger.error(f'Error running query: {query} on SurrealDB!')
+            logger.error(f'Error running query: {query} on SurrealDB!')
             response = Response(
                 RESPONSE_TYPE.ERROR,
                 error_message=str(e)
@@ -198,32 +199,44 @@ class SurrealDBHandler(DatabaseHandler):
 connection_args = OrderedDict(
     user={
         'type': ARG_TYPE.STR,
-        'description': 'The user name used to authenticate with the SurrealDB server.'
+        'description': 'The user name used to authenticate with the SurrealDB server.',
+        'required': True,
+        'label': 'User'
     },
     password={
-        'type': ARG_TYPE.STR,
-        'description': 'The password to authenticate the user with the SurrealDB server.'
+        'type': ARG_TYPE.PWD,
+        'description': 'The password to authenticate the user with the SurrealDB server.',
+        'required': True,
+        'label': 'Password'
     },
     database={
         'type': ARG_TYPE.STR,
-        'description': 'The database name to use when connecting with the SurrealDB server.'
+        'description': 'The database name to use when connecting with the SurrealDB server.',
+        'required': True,
+        'label': 'Database name'
     },
     host={
         'type': ARG_TYPE.STR,
-        'description': 'The host name or IP address of the SurrealDB server. '
+        'description': 'The host name or IP address of the SurrealDB server. ',
+        'required': True,
+        'label': 'Host'
     },
     port={
         'type': ARG_TYPE.INT,
-        'description': 'The TCP/IP port of the SurrealDB server. Must be an integer.'
+        'description': 'The TCP/IP port of the SurrealDB server. Must be an integer.',
+        'required': True,
+        'label': 'Port'
     },
     namespace={
         'type': ARG_TYPE.STR,
-        'description': ''
+        'description': 'The namespace name to be connected',
+        'required': True,
+        'label': 'Namespace'
     }
 )
 connection_args_example = OrderedDict(
     host='localhost',
-    port=8000,
+    port=17141,
     user='admin',
     password='password',
     database='test',

@@ -3,7 +3,7 @@ import datetime
 from alembic.autogenerate import produce_migrations, render, api
 from alembic import context
 from sqlalchemy import UniqueConstraint
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, Index
 
 # required for code execution
@@ -12,6 +12,9 @@ import sqlalchemy as sa  # noqa
 
 import mindsdb.interfaces.storage.db    # noqa
 from mindsdb.interfaces.storage.db import Json, Array
+from mindsdb.utilities import log
+
+logger = log.getLogger(__name__)
 
 # revision identifiers, used by Alembic.
 revision = '17c3d2384711'
@@ -21,7 +24,12 @@ depends_on = None
 
 # ========================================== current database state ========================================
 
-Base = declarative_base()
+
+class Base:
+    __allow_unmapped__ = True
+
+
+Base = declarative_base(cls=Base)
 
 # Source: https://stackoverflow.com/questions/26646362/numpy-array-is-not-json-serializable
 
@@ -159,8 +167,8 @@ def upgrade():
 
     code = template_args['upgrades']
     code = code.replace('\n    ', '\n')
-    print('\nPerforming database changes:')
-    print(code)
+    logger.info('\nPerforming database changes:')
+    logger.info(code)
     exec(code)
 
 

@@ -6,6 +6,8 @@ from monkeylearn import MonkeyLearn
 
 from mindsdb.integrations.libs.base import BaseMLEngine
 
+from mindsdb.integrations.utilities.handler_utils import get_api_key
+
 
 class monkeylearnHandler(BaseMLEngine):
     name = "monkeylearn"
@@ -16,9 +18,9 @@ class monkeylearnHandler(BaseMLEngine):
         if "using" in args:
             args = args["using"]
 
-        if "api_key" not in args:
-            raise Exception("API_KEY not found")
-        api_key = args["api_key"]
+        if "monkeylearn_api_key" not in args:
+            raise Exception("monkeylearn_api_key not found")
+        api_key = get_api_key('monkeylearn', args["using"], self.engine_storage, strict=False)
         if "model_id" in args:
             if "cl_" not in args["model_id"]:
                 raise Exception("Classifier tasks are only supported currently")
@@ -51,23 +53,23 @@ class monkeylearnHandler(BaseMLEngine):
         input_list = df[input_column]
         if len(input_list) > 500:
             raise Exception("Classifier only supports 500 data elements in list")
-        ml = MonkeyLearn(args['api_key'])
-        df_dict = []
-        pred_dict = {}
+        ml = get_api_key('monkeylearn', args["using"], self.engine_storage, strict=False)
+        df_list = []
         for text in input_list:
+            pred_dict = {}
             classifier_response = ml.classifiers.classify(args['model_id'], [text])
             for res_dict in classifier_response.body:
                 if res_dict.get("error") is True:
                     raise Exception(res_dict["error_detail"])
                 pred_dict['classification'] = res_dict['classifications']
                 pred_dict['tag'] = res_dict['classifications'][0]['tag_name']
-                df_dict.append(pred_dict)
-        pred_df = pd.DataFrame(df_dict)
+                df_list.append(pd.DataFrame([pred_dict]))
+        pred_df = pd.concat(df_list)
         return pred_df
 
     def describe(self, attribute: Optional[str] = None) -> pd.DataFrame:
         args = self.model_storage.json_get('args')
-        ml = MonkeyLearn(args['api_key'])
+        ml = get_api_key('monkeylearn', args["using"], self.engine_storage, strict=False)
         response = ml.classifiers.detail(args['model_id'])
         description = {}
         description['name'] = response.body['name']

@@ -19,6 +19,7 @@ from mindsdb.integrations.libs.const import HANDLER_CONNECTION_ARG_TYPE as ARG_T
 
 oracledb.defaults.fetch_lobs = False  # return LOBs directly as strings or bytes
 
+logger = log.getLogger(__name__)
 
 class OracleHandler(DatabaseHandler):
     """
@@ -35,6 +36,14 @@ class OracleHandler(DatabaseHandler):
         self.service_name = connection_data.get("service_name")
         self.user = connection_data.get("user")
         self.password = connection_data.get("password")
+        self.disable_oob = bool(connection_data.get("disable_oob"))
+
+        self.auth_mode = None
+        if 'auth_mode' in connection_data:
+            mode_name = 'AUTH_MODE_' + connection_data['auth_mode'].upper()
+            if not hasattr(oracledb, mode_name):
+                raise ValueError(f'Unknown auth mode: {mode_name}')
+            self.auth_mode = getattr(oracledb, mode_name)
 
         if self.sid is None and self.service_name is None:
             raise ValueError("Either 'sid' or 'service_name' must be given")
@@ -52,8 +61,12 @@ class OracleHandler(DatabaseHandler):
     def connect(self) -> Connection:
         if self.is_connected is True:
             return self.connection
-
-        connection = connect(user=self.user, password=self.password, dsn=self.dsn)
+        d = None  # default suitable for Linux OS
+        oracledb.init_oracle_client(lib_dir=d)
+        connection = connect(
+            user=self.user, password=self.password, dsn=self.dsn,
+            disable_oob=self.disable_oob, mode=self.auth_mode,
+        )
 
         self.is_connected = True
         self.connection = connection
@@ -79,7 +92,7 @@ class OracleHandler(DatabaseHandler):
             con.ping()
             response.success = True
         except Exception as e:
-            log.logger.error(f"Error connecting to Oracle DB {self.dsn}, {e}!")
+            logger.error(f"Error connecting to Oracle DB {self.dsn}, {e}!")
             response.error_message = str(e)
         finally:
             if response.success is True and need_to_close:
@@ -114,7 +127,7 @@ class OracleHandler(DatabaseHandler):
 
                 connection.commit()
             except Exception as e:
-                log.logger.error(f"Error running query: {query} on {self.dsn}!")
+                logger.error(f"Error running query: {query} on {self.dsn}!")
                 response = Response(
                     RESPONSE_TYPE.ERROR,
                     error_message=str(e),
@@ -141,7 +154,7 @@ class OracleHandler(DatabaseHandler):
         query = """
             SELECT table_name
             FROM user_tables
-            ORDER BY 1;
+            ORDER BY 1
         """
         return self.native_query(query)
 
@@ -184,6 +197,14 @@ connection_args = OrderedDict(
     password={
         "type": ARG_TYPE.STR,
         "description": "The password to authenticate the user against Oracle DB.",
+    },
+    disable_oob={
+        "type": ARG_TYPE.BOOL,
+        "description": "Disable out-of-band breaks",
+    },
+    auth_mode={
+        "type": ARG_TYPE.STR,
+        "description": "Database privilege for connection",
     },
 )
 

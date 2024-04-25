@@ -1,6 +1,6 @@
 import unittest
 from mindsdb.integrations.handlers.db2_handler.db2_handler import DB2Handler
-from mindsdb.api.mysql.mysql_proxy.libs.constants.response_type import RESPONSE_TYPE
+from mindsdb.api.executor.data_types.response_type import RESPONSE_TYPE
 
 
 class DB2HandlerTest(unittest.TestCase):
@@ -13,10 +13,10 @@ class DB2HandlerTest(unittest.TestCase):
                 "user": "db2admin",
                 "password": "1234",
                 "database": "Books",
-                "schema_name": "db2admin"
+                "schema_name": "db2admin",
             }
         }
-        cls.handler = DB2Handler('test_db2_handler', **cls.kwargs)
+        cls.handler = DB2Handler("test_db2_handler", **cls.kwargs)
 
     def test_0_connect(self):
         self.handler.connect()
@@ -32,15 +32,15 @@ class DB2HandlerTest(unittest.TestCase):
     def test_3_get_tables(self):
         tables = self.handler.get_tables()
         assert tables.type is not RESPONSE_TYPE.ERROR
- 
+
     def test_4_select_query(self):
         query = "SELECT * FROM AUTHORS"
         result = self.handler.native_query(query)
         assert result.type is RESPONSE_TYPE.TABLE
 
     def test_5_check_connection(self):
-         self.handler.check_connection()
+        self.handler.check_connection()
 
-        
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()

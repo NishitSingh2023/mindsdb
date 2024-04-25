@@ -10,10 +10,10 @@ from functools import partial
 import socket
 from typing import Callable, Dict, Type, Any, Iterable, Sequence
 
-from mindsdb.api.mysql.mysql_proxy.controllers import SessionController
+from mindsdb.api.executor.controllers import SessionController
 from mindsdb.api.postgres.postgres_proxy.executor import Executor
 from mindsdb.api.mysql.mysql_proxy.libs.constants.mysql import CHARSET_NUMBERS
-from mindsdb.api.mysql.mysql_proxy.libs.constants.response_type import RESPONSE_TYPE
+from mindsdb.api.executor.data_types.response_type import RESPONSE_TYPE
 from mindsdb.api.common.check_auth import check_auth
 from mindsdb.api.mysql.mysql_proxy.mysql_proxy import SQLAnswer
 from mindsdb.api.postgres.postgres_proxy.postgres_packets.errors import POSTGRES_SYNTAX_ERROR_CODE
@@ -28,7 +28,7 @@ from mindsdb.api.postgres.postgres_proxy.postgres_packets.postgres_packets impor
 from mindsdb.api.postgres.postgres_proxy.utilities import strip_null_byte
 from mindsdb.utilities.config import Config
 from mindsdb.utilities.context import context as ctx
-from mindsdb.utilities.log import get_log
+from mindsdb.utilities import log
 from mindsdb.api.mysql.mysql_proxy.external_libs.mysql_scramble import scramble as scramble_func
 
 
@@ -37,7 +37,7 @@ class PostgresProxyHandler(socketserver.StreamRequestHandler):
     user_parameters: Dict[bytes, bytes]
 
     def __init__(self, request, client_address, server):
-        self.logger = get_log("postgres_proxy")
+        self.logger = log.getLogger(__name__)
         self.charset = 'utf8'
         self.charset_text_type = CHARSET_NUMBERS['utf8_general_ci']
         self.session = None
@@ -74,6 +74,7 @@ class PostgresProxyHandler(socketserver.StreamRequestHandler):
         if self.is_cloud:
             # We already have a connection started through the gateway.
             started = True
+            self.handshake()
         else:
             started = self.start_connection()
         if started:
@@ -461,14 +462,16 @@ class PostgresProxyHandler(socketserver.StreamRequestHandler):
     @staticmethod
     def startProxy():
         config = Config()
-        server = TcpServer(("localhost", 55432), PostgresProxyHandler)
+        host = config['api']['postgres']['host']
+        port = int(config['api']['postgres']['port'])
+        server = TcpServer((host, port), PostgresProxyHandler)
         server.connection_id = 0
         server.mindsdb_config = config
         server.check_auth = partial(check_auth, config=config)
         server.serve_forever()
 
 
-class TcpServer(socketserver.TCPServer):
+class TcpServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
 
 

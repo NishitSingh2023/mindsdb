@@ -31,7 +31,7 @@ def app():
                 'parameters': {
                     "user": "demo_user",
                     "password": "demo_password",
-                    "host": "3.220.66.106",
+                    "host": "samples.mindsdb.com",
                     "port": "5432",
                     "database": "demo"
                 }
@@ -72,7 +72,8 @@ def test_train_model(client):
         'name': 'home_rentals_model',
         'predict': 'rental_price',
         'status': 'generating',
-        'version': 1
+        'version': 1,
+        'problem_definition': "{'target': 'rental_price'}"
     }
 
     assert created_model == expected_model
@@ -150,7 +151,6 @@ def test_get_model_by_version(client):
     model_active_ver = response.get_json()
 
     expected_model = model_ver_1.copy()
-    expected_model['accuracy'] = None
     expected_model['active'] = True
     expected_model['error'] = None
     expected_model['fetch_data_query'] = 'SELECT * FROM demo_data.home_rentals'

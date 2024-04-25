@@ -1,17 +1,19 @@
 from pathlib import Path
 import json
 
-import requests
 import pytest
 
 from pymongo import MongoClient
 
-from mindsdb.api.mysql.mysql_proxy.libs.constants.response_type import RESPONSE_TYPE
+from mindsdb.api.executor.data_types.response_type import RESPONSE_TYPE
 from .conftest import CONFIG_PATH
+from tests.utils.http_test_helpers import HTTPHelperMixin
 
 # used by mindsdb_app fixture in conftest
 OVERRIDE_CONFIG = {
     'integrations': {},
+    'tasks': {'disable': True},
+    'jobs': {'disable': True}
 }
 
 # used by (required for) mindsdb_app fixture in conftest
@@ -27,7 +29,7 @@ def get_string_params(parameters):
 
 
 @pytest.mark.usefixtures('mindsdb_app', 'postgres_db')
-class TestCompanyIndependent:
+class TestCompanyIndependent(HTTPHelperMixin):
     @classmethod
     def setup_class(cls):
         CONFIG.update(
@@ -66,46 +68,11 @@ class TestCompanyIndependent:
         assert len(a) == len(b)
         assert a == b
 
-    def sql_via_http(self, request: str, expected_resp_type: str = None, context: dict = None,
-                     headers: dict = None, company_id: int = None) -> dict:
-        if context is None:
-            context = {}
-
-        if headers is None:
-            headers = {}
-        if company_id is not None:
-            headers['company-id'] = str(company_id)
-
-        root = 'http://127.0.0.1:47334/api'
-        response = requests.post(
-            f'{root}/sql/query',
-            json={
-                'query': request,
-                'context': context
-            },
-            headers=headers
-        )
-        assert response.status_code == 200
-        response = response.json()
-        if expected_resp_type is not None:
-            assert response.get('type') == expected_resp_type
-        else:
-            assert response.get('type') in [RESPONSE_TYPE.OK, RESPONSE_TYPE.TABLE, RESPONSE_TYPE.ERROR]
-        assert isinstance(response.get('context'), dict)
-        if response['type'] == 'table':
-            assert isinstance(response.get('data'), list)
-            assert isinstance(response.get('column_names'), list)
-        elif response['type'] == 'error':
-            assert isinstance(response.get('error_code'), int)
-            assert isinstance(response.get('error_message'), str)
-        self._sql_via_http_context = response['context']
-        return response
-
     def test_initial_state_http(self):
         # add permanent integrations
         for cid in [CID_A, CID_B]:
             databases_names = self.get_db_names(cid)
-            assert len(databases_names) == 1 and databases_names[0] == 'information_schema'
+            assert len(databases_names) == 2 and 'information_schema' in databases_names and 'log' in databases_names
             self.sql_via_http(
                 "CREATE DATABASE files ENGINE='files'",
                 company_id=cid,
@@ -115,7 +82,8 @@ class TestCompanyIndependent:
             self.assert_list(
                 databases_names, {
                     'information_schema',
-                    'files'
+                    'files',
+                    'log'
                 }
             )
             self.sql_via_http(
@@ -128,7 +96,8 @@ class TestCompanyIndependent:
                 databases_names, {
                     'information_schema',
                     'mindsdb',
-                    'files'
+                    'files',
+                    'log'
                 }
             )
 
@@ -154,6 +123,7 @@ class TestCompanyIndependent:
                 'information_schema',
                 'mindsdb',
                 'files',
+                'log',
                 'test_integration_a'
             }
         )
@@ -163,7 +133,8 @@ class TestCompanyIndependent:
             databases_names_b, {
                 'information_schema',
                 'mindsdb',
-                'files'
+                'files',
+                'log'
             }
         )
 
@@ -183,6 +154,7 @@ class TestCompanyIndependent:
                 'information_schema',
                 'mindsdb',
                 'files',
+                'log',
                 'test_integration_a'
             }
         )
@@ -193,6 +165,7 @@ class TestCompanyIndependent:
                 'information_schema',
                 'mindsdb',
                 'files',
+                'log',
                 'test_integration_b'
             }
         )
@@ -210,7 +183,8 @@ class TestCompanyIndependent:
             databases_names_a, {
                 'information_schema',
                 'mindsdb',
-                'files'
+                'files',
+                'log'
             }
         )
 
@@ -220,6 +194,7 @@ class TestCompanyIndependent:
                 'information_schema',
                 'mindsdb',
                 'files',
+                'log',
                 'test_integration_b'
             }
         )
@@ -240,6 +215,7 @@ class TestCompanyIndependent:
                 'information_schema',
                 'mindsdb',
                 'files',
+                'log',
                 'test_integration_a'
             }
         )
@@ -250,6 +226,7 @@ class TestCompanyIndependent:
                 'information_schema',
                 'mindsdb',
                 'files',
+                'log',
                 'test_integration_b'
             }
         )
@@ -261,9 +238,10 @@ class TestCompanyIndependent:
             self.assert_list(
                 tables, {
                     'jobs',
-                    'jobs_history',
                     'models',
-                    'models_versions'
+                    'models_versions',
+                    'mdb_triggers',
+                    'chatbots',
                 }
             )
         # endregion
@@ -322,9 +300,10 @@ class TestCompanyIndependent:
             self.assert_list(
                 tables, {
                     'jobs',
-                    'jobs_history',
                     'models',
                     'models_versions',
+                    'mdb_triggers',
+                    'chatbots',
                     f'test_view_{char}'
                 }
             )
@@ -347,9 +326,10 @@ class TestCompanyIndependent:
             self.assert_list(
                 tables, {
                     'jobs',
-                    'jobs_history',
                     'models',
-                    'models_versions'
+                    'models_versions',
+                    'mdb_triggers',
+                    'chatbots',
                 }
             )
 
@@ -395,12 +375,12 @@ class TestCompanyIndependent:
 
         databases = client_a.list_databases()
         self.assert_list([x['name'] for x in databases], {
-            'admin', 'information_schema', 'mindsdb',
+            'admin', 'information_schema', 'mindsdb', 'log',
             'files', 'test_integration_a'
         })
         databases = client_b.list_databases()
         self.assert_list([x['name'] for x in databases], {
-            'admin', 'information_schema', 'mindsdb',
+            'admin', 'information_schema', 'mindsdb', 'log',
             'files', 'test_integration_b'
         })
 
@@ -422,17 +402,19 @@ class TestCompanyIndependent:
         collections = client_a.mindsdb.list_collection_names()
         self.assert_list(collections, {
             'jobs',
-            'jobs_history',
             'models',
             'models_versions',
+            'mdb_triggers',
+            'chatbots',
             'test_mon_p_a',
             'model_a'
         })
         collections = client_b.mindsdb.list_collection_names()
         self.assert_list(collections, {
             'jobs',
-            'jobs_history',
             'models',
             'models_versions',
+            'mdb_triggers',
+            'chatbots',
             'model_b'
         })

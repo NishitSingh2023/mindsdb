@@ -1,1 +1,1 @@
-clickhouse-sqlalchemy
+clickhouse-sqlalchemy>=0.3.1

@@ -11,17 +11,22 @@ from flask_restx import Resource, abort
 from flask import current_app as ca
 from dateutil.tz import tzlocal
 
-from mindsdb.utilities import log
 from mindsdb.api.http.namespaces.configs.config import ns_conf
+from mindsdb.api.http.utils import http_error
+from mindsdb.metrics.metrics import api_endpoint_metrics
+from mindsdb.utilities import log
+from mindsdb.utilities.functions import encrypt, decrypt
 from mindsdb.utilities.log_controller import get_logs
 from mindsdb.utilities.config import Config
-from mindsdb.api.http.utils import http_error
+
+logger = log.getLogger(__name__)
 
 
 @ns_conf.route('/logs')
 @ns_conf.param('name', 'Get logs')
 class GetLogs(Resource):
     @ns_conf.doc('get_integrations')
+    @api_endpoint_metrics('GET', '/config/logs')
     def get(self):
         min_timestamp = parse_datetime(request.args['min_timestamp'])
         max_timestamp = request.args.get('max_timestamp', None)
@@ -38,6 +43,7 @@ class GetLogs(Resource):
 @ns_conf.param('name', 'Get config')
 class GetConfig(Resource):
     @ns_conf.doc('get_config')
+    @api_endpoint_metrics('GET', '/config')
     def get(self):
         config = Config()
         return {
@@ -49,6 +55,7 @@ class GetConfig(Resource):
         }
 
     @ns_conf.doc('put_config')
+    @api_endpoint_metrics('PUT', '/config')
     def put(self):
         data = request.json
 
@@ -77,6 +84,7 @@ class GetConfig(Resource):
 @ns_conf.route('/integrations')
 @ns_conf.param('name', 'List all database integration')
 class ListIntegration(Resource):
+    @api_endpoint_metrics('GET', '/config/integrations')
     def get(self):
         return {
             'integrations': [k for k in ca.integration_controller.get_all(sensitive_info=False)]
@@ -87,6 +95,7 @@ class ListIntegration(Resource):
 @ns_conf.param('name', 'List all database integration')
 class AllIntegration(Resource):
     @ns_conf.doc('get_all_integrations')
+    @api_endpoint_metrics('GET', '/config/all_integrations')
     def get(self):
         integrations = ca.integration_controller.get_all(sensitive_info=False)
         return integrations
@@ -96,6 +105,7 @@ class AllIntegration(Resource):
 @ns_conf.param('name', 'Database integration')
 class Integration(Resource):
     @ns_conf.doc('get_integration')
+    @api_endpoint_metrics('GET', '/config/integrations/integration')
     def get(self, name):
         integration = ca.integration_controller.get(name, sensitive_info=False)
         if integration is None:
@@ -104,10 +114,13 @@ class Integration(Resource):
         return integration
 
     @ns_conf.doc('put_integration')
+    @api_endpoint_metrics('PUT', '/config/integrations/integration')
     def put(self, name):
         params = {}
-        params.update((request.json or {}).get('params', {}))
-        params.update(request.form or {})
+        if request.is_json:
+            params.update((request.json or {}).get('params', {}))
+        else:
+            params.update(request.form or {})
 
         if len(params) == 0:
             abort(400, "type of 'params' must be dict")
@@ -123,9 +136,13 @@ class Integration(Resource):
                 if temp_dir_path not in file_path.parents:
                     raise Exception(f'Can not save file at path: {file_path}')
                 file.save(file_path)
-                params[key] = file_path
+                params[key] = str(file_path)
 
         is_test = params.get('test', False)
+
+        config = Config()
+        secret_key = config.get('secret_key', 'dummy-key')
+
         if is_test:
             del params['test']
 
@@ -135,10 +152,22 @@ class Integration(Resource):
                 handler_type=handler_type,
                 connection_data=params
             )
+
             status = handler.check_connection()
             if temp_dir is not None:
                 shutil.rmtree(temp_dir)
-            return status, 200
+
+            resp = status.to_json()
+            if status.success and 'code' in params:
+                if hasattr(handler, 'handler_storage'):
+                    # attach storage if exists
+                    export = handler.handler_storage.export_files()
+                    if export:
+                        # encrypt with flask secret key
+                        encrypted = encrypt(export, secret_key)
+                        resp['storage'] = encrypted.decode()
+
+            return resp, 200
 
         integration = ca.integration_controller.get(name, sensitive_info=False)
         if integration is not None:
@@ -149,19 +178,28 @@ class Integration(Resource):
             if engine is not None:
                 del params['type']
             params.pop('publish', False)
+            storage = params.pop('storage', None)
             ca.integration_controller.add(name, engine, params)
 
+            # copy storage
+            if storage is not None:
+                handler = ca.integration_controller.get_data_handler(name)
+
+                export = decrypt(storage.encode(), secret_key)
+                handler.handler_storage.import_files(export)
+
         except Exception as e:
-            log.logger.error(str(e))
+            logger.error(str(e))
             if temp_dir is not None:
                 shutil.rmtree(temp_dir)
             abort(500, f'Error during config update: {str(e)}')
 
         if temp_dir is not None:
             shutil.rmtree(temp_dir)
-        return '', 200
+        return {}, 200
 
     @ns_conf.doc('delete_integration')
+    @api_endpoint_metrics('DELETE', '/config/integrations/integration')
     def delete(self, name):
         integration = ca.integration_controller.get(name)
         if integration is None:
@@ -169,11 +207,12 @@ class Integration(Resource):
         try:
             ca.integration_controller.delete(name)
         except Exception as e:
-            log.logger.error(str(e))
-            abort(500, f'Error during integration delete: {str(e)}')
-        return '', 200
+            logger.error(str(e))
+            abort(500, f"Error during integration delete: {str(e)}")
+        return "", 200
 
     @ns_conf.doc('modify_integration')
+    @api_endpoint_metrics('POST', '/config/integrations/integration')
     def post(self, name):
         params = {}
         params.update((request.json or {}).get('params', {}))
@@ -191,15 +230,16 @@ class Integration(Resource):
             ca.integration_controller.modify(name, params)
 
         except Exception as e:
-            log.logger.error(str(e))
-            abort(500, f'Error during integration modifycation: {str(e)}')
-        return '', 200
+            logger.error(str(e))
+            abort(500, f"Error during integration modifycation: {str(e)}")
+        return "", 200
 
 
 @ns_conf.route('/integrations/<name>/check')
 @ns_conf.param('name', 'Database integration checks')
 class Check(Resource):
     @ns_conf.doc('check')
+    @api_endpoint_metrics('GET', '/config/integrations/integration/check')
     def get(self, name):
         if ca.integration_controller.get(name) is None:
             abort(404, f'Can\'t find database integration: {name}')
@@ -209,6 +249,7 @@ class Check(Resource):
 
 @ns_conf.route('/vars')
 class Vars(Resource):
+    @api_endpoint_metrics('GET', '/config/vars')
     def get(self):
         if os.getenv('CHECK_FOR_UPDATES', '1').lower() in ['0', 'false']:
             telemtry = False

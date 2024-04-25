@@ -1,59 +1,227 @@
-# Huggingface ML Handler
+---
+title: Hugging Face Inference API
+sidebarTitle: Hugging Face Inference API
+---
 
-## Briefly describe what ML framework does this handler integrate to MindsDB, and how? 
-This handler integrates the Hugging Face Inference API to MindsDB using Hugging-Py-Face, a powerful Python package that provides seamless integration with the Hugging Face Inference API. The source code for the package is available here: https://github.com/MinuraPunchihewa/hugging-py-face
+This documentation describes the integration of MindsDB with [Hugging Face Inference API](https://huggingface.co/inference-endpoints/serverless).
+The integration allows for the deployment of Hugging Face models through Inference API within MindsDB, providing the models with access to data from various data sources.
 
-## Why is this integration useful? What does the ideal predictive use case for this integration look like? When would you definitely not use this integration? 
-This integration is useful for a number of reasons,
-- Faster model deployment: Pre-trained models can be quickly deployed for use in applications without having to spend time training the models.
-- Greater model variety: Hugging Face offers a large and growing collection of pre-trained models for a wide range of tasks that are made available through this integration.
-- Reduced computational costs: Computational costs of training models from scratch can be avoided.
+## Prerequisites
 
-An ideal predictive use case for this integration would be one where you have a large and complex dataset that you want to use to make predictions or classifications, and where you don't have the time or resources to train a model from scratch.
+Before proceeding, ensure the following prerequisites are met:
 
-This integration is not suitable for uses cases that require a highly customized machine learning model trained on a specific dataset.
+1. Install MindsDB [locally via Docker](https://docs.mindsdb.com/setup/self-hosted/docker) or use [MindsDB Cloud](https://cloud.mindsdb.com/).
+2. To use Hugging Face Inference API within MindsDB, install the required dependencies following [this instruction](/setup/self-hosted/docker#install-dependencies).
+3. Obtain the API key for Hugging Face Inference API required to deploy and use Hugging Face models through Inference API within MindsDB. Generate tokens in the `Settings -> Access Tokens` tab of the Hugging Face account.
 
-## Are models created with this integration fast and scalable, in general?
-In general, yes. However, the free Inference API may be rate limited for heavy use cases. More information about the API can be found here: https://huggingface.co/docs/api-inference/faq. Furthermore, the performance of the Computer Vision and Audio Processing tasks on large datasets will be somewhat slow as a API call needs to be made for each image/audio file to be processed. Future work will include optimizing performance through parallelism and batch jobs, however, this will be supported only for paid plans of the Hugging Face Inference API.
+## Setup
 
-## What are the recommended system specifications for models created with this framework?
-Since the models are hosted on by Hugging Face, there is no need for any additional system specifications. The only requirement is to have an internet connection.
+Create an AI engine from the [Hugging Face Inference API handler](https://github.com/mindsdb/mindsdb/tree/staging/mindsdb/integrations/handlers/huggingface_api_handler).
 
-## To what degree can users control the underlying framework by passing parameters via the USING syntax?
-Users are allowed complete control over the underlying framework by passing parameters via the USING syntax. The parameters are passed to the Hugging Face Inference API, which is used to create the models. The parameters supported for each task are documented here: https://huggingface.co/docs/api-inference/detailed_parameters
-
-## Does this integration offer model explainability or insights via the DESCRIBE syntax?
-No, this integration does not offer model explainability or insights via the DESCRIBE syntax.
-
-## Does this integration support fine-tuning pre-existing models (i.e. is the update() method implemented)? Are there any caveats?
-No, fine-tuning is not supported. This integration is only for inference using the hosted models of the Hugging Face Inference API.
-
-## Are there any other noteworthy aspects to this handler?
-A few other noteworthy aspects of this handler are,
-- Flexibility: This integration provides a lot of flexibility in terms of the types of models you can build and the types of data you can work with. A variety of pre-trained models can be used for Natural Language Processing, Computer Vision and Audio Processing.
-- Ease of use: Similar to the Hugging Face Inference API itself, this integration is desgined to be easy to use.
-
-## Any directions for future work in subsequent versions of the handler?
-Future work includes adding support for other tasks supported by the Hugging Face Inference API and optimizing performance through parallelism and batch jobs.
-
-## Please provide a minimal SQL example that uses this ML engine (pointers to integration tests in the PR also valid)
 ```sql
--- Create Huggingface engine
-CREATE ML_ENGINE hf_api_engine
+CREATE ML_ENGINE huggingface_api_engine
 FROM huggingface_api
 USING
-  api_key = 'hf_...';
-  
--- Create a model for text classification
-CREATE MODEL mindsdb.hf_sentiment_classifier
+      huggingface_api_api_key = 'api-key-value';
+```
+
+Create a model using `huggingface_api_engine` as an engine.
+
+```sql
+CREATE MODEL huggingface_api_model
+PREDICT target_column
+USING
+      engine = 'huggingface_api_engine',     -- engine name as created via CREATE ML_ENGINE
+      task = 'task_name',                -- choose one of 'text-classification', 'text-generation', 'question-answering', 'sentence-similarity', 'zero-shot-classification', 'summarization', 'fill-mask', 'image-classification', 'object-detection', 'automatic-speech-recognition', 'audio-classification'
+      input_column = 'column_name',      -- column that stores input/question to the model
+      labels = ['label 1', 'label 2'];   -- labels used to classify data (used for classification tasks)
+```
+
+The following parameters are supported in the `USING` clause of the `CREATE MODEL` statement:
+
+| Parameter          | Required                                     | Description     |
+| ------------------ | -------------------------------------------- | --------------- |
+| `engine`           | Yes                                          | It is the name of the ML engine created with the `CREATE ML_ENGINE` statement.|
+| `task`             | Only if `model_name` is not provided         | It describes a task to be performed.|
+| `model_name`       | Only if `task` is not provided               | It specifies a model to be used.|
+| `input_column`     | Yes                                          | It is the name of the column that stores input to the model.|
+| `endpoint`         | No                                           | It defines the endpoint to use for API calls. If not specified, the hosted Inference API from Hugging Face will be used.|
+| `options`          | No                                           | It is a JSON object containing additional options to pass to the API call. More information about the available options for each task can be found [here](https://huggingface.co/docs/api-inference/detailed_parameters).|
+| `parameters`       | No                                           | It is a JSON object containing additional parameters to pass to the API call. More information about the available parameters for each task can be found [here](https://huggingface.co/docs/api-inference/detailed_parameters).|
+| `context_column`   | Only if `task` is `question-answering`       | It is used for the `question-answering` task to provide context to the question.|
+| `input_column2`    | Only if `task` is `sentence-similarity`      | It is used for the `sentence-similarity` task to provide the second input sentence for comparison.|
+| `candidate_labels` | Only if `task` is `zero-shot-classification` | It is used for the `zero-shot-classification` task to classify input data according to provided labels.|
+
+## Usage
+
+The following usage examples utilize `huggingface_api_engine` to create a model with the `CREATE MODEL` statement.
+
+Create a model to classify input text as spam or ham.
+
+```sql
+CREATE MODEL spam_classifier
+PREDICT is_spam
+USING
+      engine = 'huggingface_api_engine',
+      task = 'text-classification',
+      column = 'text';
+```
+
+Query the model to get predictions.
+
+```sql
+SELECT text, is_spam
+FROM spam_classifier
+WHERE text = 'Subscribe to this channel asap';
+```
+
+Here is the output:
+
+```sql
++--------------------------------+---------+
+| text                           | is_spam |
++--------------------------------+---------+
+| Subscribe to this channel asap | spam    |
++--------------------------------+---------+
+```
+
+<Info>
+
+Find more quick examples below:
+
+<AccordionGroup>
+
+<Accordion title="Text Classification">
+```sql
+CREATE MODEL mindsdb.hf_text_classifier
 PREDICT sentiment
 USING
   task = 'text-classification',
-  column = 'text',
-  engine = 'hf_api_engine';
-
--- Predict sentiment using model
-SELECT text, sentiment
-FROM mindsdb.hf_sentiment_classifier
-WHERE text = 'I like you. I love you.';
+  engine = 'hf_api_engine',
+  input_column = 'text';
 ```
+</Accordion>
+
+<Accordion title="Fill Mask">
+```sql
+CREATE MODEL mindsdb.hf_fill_mask
+PREDICT sequence
+USING
+  task = 'fill-mask',
+  engine = 'hf_api_engine',
+  input_column = 'text';
+```
+</Accordion>
+
+<Accordion title="Summarization">
+```sql
+CREATE MODEL mindsdb.hf_summarizer
+PREDICT summary
+USING
+  task = 'summarization',
+  engine = 'hf_api_engine',
+  input_column = 'text';
+```
+</Accordion>
+
+<Accordion title="Text Generation">
+```sql
+CREATE MODEL mindsdb.hf_text_generator
+PREDICT generated_text
+USING
+  task = 'text-generation',
+  engine = 'hf_api_engine',
+  input_column = 'text';
+```
+</Accordion>
+
+<Accordion title="Question Answering">
+```sql
+CREATE MODEL mindsdb.hf_question_answerer
+PREDICT answer
+USING
+  task = 'question-answering',
+  engine = 'hf_api_engine',
+  input_column = 'question',
+  context_column = 'context';
+```
+</Accordion>
+
+<Accordion title="Sentences Similarity">
+```sql
+CREATE MODEL mindsdb.hf_sentence_similarity
+PREDICT similarity
+USING
+  task = 'sentence-similarity',
+  engine = 'hf_api_engine',
+  input_column = 'sentence1',
+  input_column2 = 'sentence2';
+```
+</Accordion>
+
+<Accordion title="Zero Shot Classification">
+```sql
+CREATE MODEL mindsdb.hf_zero_shot_classifier
+PREDICT label
+USING
+  task = 'zero-shot-classification',
+  engine = 'hf_api_engine',
+  input_column = 'text',
+  candidate_labels = ['label1', 'label2', 'label3'];
+```
+</Accordion>
+
+<Accordion title="Image Classification">
+```sql
+CREATE MODEL mindsdb.hf_image_classifier
+PREDICT label
+USING
+  task = 'image-classification',
+  engine = 'hf_api_engine',
+  input_column = 'image_url';
+```
+</Accordion>
+
+<Accordion title="Object Detection">
+```sql
+CREATE MODEL mindsdb.hf_object_detector
+PREDICT objects
+USING
+  task = 'object-detection',
+  engine = 'hf_api_engine',
+  input_column = 'image_url';
+```
+</Accordion>
+
+<Accordion title="Automatic Speech Recognition">
+```sql
+CREATE MODEL mindsdb.hf_speech_recognizer
+PREDICT transcription
+USING
+  task = 'automatic-speech-recognition',
+  engine = 'hf_api_engine',
+  input_column = 'audio_url';
+```
+</Accordion>
+
+<Accordion title="Audio Classification">
+```sql
+CREATE MODEL mindsdb.hf_audio_classifier
+PREDICT label
+USING
+  task = 'audio-classification',
+  engine = 'hf_api_engine',
+  input_column = 'audio_url';
+```
+</Accordion>
+
+</AccordionGroup>
+
+</Info>
+
+<Tip>
+
+**Next Steps**
+
+Follow [this link](/sql/tutorials/hugging-face-inference-api-examples) to see more use case examples.
+</Tip>

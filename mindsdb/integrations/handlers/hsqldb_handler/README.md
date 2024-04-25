@@ -30,14 +30,14 @@ CommLog         = 1
 UsageCount      = 1
 ```
 
-then, in mindsDB, the following syntax can be used to acces your database,
+then, in mindsDB, the following syntax can be used to access your database,
 
 ```sql
 CREATE DATABASE exampledb
 WITH
 engine='hsqldb',
 parameters={
-    "server_name": "3.220.66.106",
+    "server_name": "samples.mindsdb.com",
     "port":  "5432",
     "database_name": "demo",
     "username": "demo_user",

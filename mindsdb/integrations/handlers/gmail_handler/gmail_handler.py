@@ -1,5 +1,6 @@
 import json
 from shutil import copyfile
+from collections import OrderedDict
 
 import requests
 
@@ -7,11 +8,15 @@ from mindsdb.integrations.libs.response import (
     HandlerStatusResponse as StatusResponse,
     HandlerResponse as Response
 )
+
+from mindsdb.integrations.libs.const import HANDLER_CONNECTION_ARG_TYPE as ARG_TYPE
+
 from mindsdb.integrations.utilities.sql_utils import extract_comparison_conditions
 from mindsdb.integrations.libs.api_handler import APIHandler, APITable
 from mindsdb_sql.parser import ast
 from mindsdb.utilities import log
 from mindsdb_sql import parse_sql
+from mindsdb.utilities.config import Config
 
 import os
 import time
@@ -20,15 +25,22 @@ import pandas as pd
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from email.message import EmailMessage
 
 from base64 import urlsafe_b64encode, urlsafe_b64decode
 
+from .utils import AuthException, google_auth_flow, save_creds_to_file
+
 DEFAULT_SCOPES = ['https://www.googleapis.com/auth/gmail.compose',
-                  'https://www.googleapis.com/auth/gmail.readonly']
+                  'https://www.googleapis.com/auth/gmail.readonly',
+                  'https://www.googleapis.com/auth/gmail.modify']
+
+logger = log.getLogger(__name__)
+
+
 
 
 class EmailsTable(APITable):
@@ -56,17 +68,20 @@ class EmailsTable(APITable):
         conditions = extract_comparison_conditions(query.where)
 
         params = {}
+        include_attachments = False
         for op, arg1, arg2 in conditions:
 
             if op == 'or':
                 raise NotImplementedError(f'OR is not supported')
 
-            if arg1 in ['query', 'label_ids', 'include_spam_trash']:
+            if arg1 in ['query', 'label_ids', 'include_spam_trash', 'include_attachments']:
                 if op == '=':
                     if arg1 == 'query':
                         params['q'] = arg2
                     elif arg1 == 'label_ids':
                         params['labelIds'] = arg2.split(',')
+                    elif arg1 == 'include_attachments':
+                        include_attachments = arg2 == 'true'
                     else:
                         params['includeSpamTrash'] = arg2
                 else:
@@ -82,7 +97,9 @@ class EmailsTable(APITable):
             method_name='list_messages',
             params=params
         )
-
+        attachments = []
+        if include_attachments:
+            attachments = self.handler.get_attachments(result)
         # filter targets
         columns = []
         for target in query.targets:
@@ -188,8 +205,71 @@ class EmailsTable(APITable):
 
             if 'thread_id' in params:
                 message['threadId'] = params['thread_id']
-
             self.handler.call_gmail_api('send_message', {'body': message})
+
+    def delete(self, query: ast.Delete):
+        """
+        Deletes an event or events in the calendar.
+
+        Args:
+            query (ast.Delete): SQL query to parse.
+
+        Returns:
+            Response: Response object containing the results.
+        """
+
+        # Parse the query to get the conditions.
+        conditions = extract_comparison_conditions(query.where)
+        for op, arg1, arg2 in conditions:
+            if op == 'or':
+                raise NotImplementedError(f'OR is not supported')
+            if arg1 == 'message_id':
+                if op == '=':
+                    self.handler.call_gmail_api('delete_message', {'id': arg2})
+                else:
+                    raise NotImplementedError(f'Unknown op: {op}')
+            else:
+                raise NotImplementedError(f'Unknown clause: {arg1}')
+
+    def update(self, query: ast.Update) -> None:
+        """Updates a label of a message.
+
+        Args:
+            query (ASTNode): The SQL query to parse.
+
+        Raises:
+            NotImplementedError: If the query contains an unsupported condition.
+        """
+        params = {}
+        conditions = extract_comparison_conditions(query.where)
+        for op, arg1, arg2 in conditions:
+            if op == 'or':
+                raise NotImplementedError(f'OR is not supported')
+            if arg1 == 'id':
+                if op == '=':
+                    params['id'] = arg2
+                else:
+                    raise NotImplementedError(f'Unknown op: {op}')
+            else:
+                raise NotImplementedError(f'Unknown clause: {arg1}')
+        request_body = {}
+        values = query.update_columns.items()
+        data_list = list(values)
+        add_label = []
+        remove_label = []
+        for key, value in data_list:
+            if key == 'addLabel':
+                add_label.append(str(value)[1:-1])
+            elif key == 'removeLabel':
+                remove_label.append(str(value)[1:-1])
+            else:
+                raise NotImplementedError(f'Unknown clause: {key}')
+        if add_label:
+            request_body['addLabelIds'] = add_label
+        if remove_label:
+            request_body['removeLabelIds'] = remove_label
+        params['body'] = request_body
+        self.handler.call_gmail_api('update_message', params)
 
 
 class GmailHandler(APIHandler):
@@ -206,8 +286,20 @@ class GmailHandler(APIHandler):
         super().__init__(name)
         self.connection_args = kwargs.get('connection_data', {})
 
-        self.s3_credentials_file = self.connection_args.get('s3_credentials_file', None)
+        self.credentials_url = self.connection_args.get('credentials_url', None)
         self.credentials_file = self.connection_args.get('credentials_file', None)
+        if self.connection_args.get('credentials'):
+            self.credentials_file = self.connection_args.pop('credentials')
+        if not self.credentials_file and not self.credentials_url:
+            # try to get from config
+            gm_config = Config().get('handlers', {}).get('gmail', {})
+            secret_file = gm_config.get('credentials_file')
+            secret_url = gm_config.get('credentials_url')
+            if secret_file:
+                self.credentials_file = secret_file
+            elif secret_url:
+                self.credentials_url = secret_url
+
         self.scopes = self.connection_args.get('scopes', DEFAULT_SCOPES)
         self.token_file = None
         self.max_page_size = 500
@@ -215,54 +307,58 @@ class GmailHandler(APIHandler):
         self.service = None
         self.is_connected = False
 
+        self.handler_storage = kwargs['handler_storage']
+
         emails = EmailsTable(self)
         self.emails = emails
         self._register_table('emails', emails)
 
-    def _has_creds_file(self, creds_file):
+    def _download_secret_file(self, secret_file):
         # Giving more priority to the S3 file
-        if self.s3_credentials_file:
-            response = requests.get(self.s3_credentials_file)
+        if self.credentials_url:
+            response = requests.get(self.credentials_url)
             if response.status_code == 200:
-                with open(creds_file, 'w') as creds:
+                with open(secret_file, 'w') as creds:
                     creds.write(response.text)
-
                 return True
             else:
-                log.logger.error("Failed to get credentials from S3", response.status_code)
+                logger.error("Failed to get credentials from S3", response.status_code)
 
         if self.credentials_file and os.path.isfile(self.credentials_file):
-            copyfile(self.credentials_file, creds_file)
+            copyfile(self.credentials_file, secret_file)
             return True
+        return False
 
-    def create_connection(self) -> object:
+    def create_connection(self):
         creds = None
 
         # Get the current dir, we'll check for Token & Creds files in this dir
-        curr_dir = os.path.dirname(__file__)
+        curr_dir = self.handler_storage.folder_get('config')
 
-        token_file = os.path.join(curr_dir, 'token.json')
         creds_file = os.path.join(curr_dir, 'creds.json')
+        secret_file = os.path.join(curr_dir, 'secret.json')
 
-        if os.path.isfile(token_file):
-            creds = Credentials.from_authorized_user_file(token_file, self.scopes)
+        if os.path.isfile(creds_file):
+            creds = Credentials.from_authorized_user_file(creds_file, self.scopes)
 
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
-            elif not os.path.isfile(creds_file) and not self._has_creds_file(creds_file):
-                raise ValueError('No valid Gmail Credentials filepath or S3 url found.')
-            else:
-                flow = InstalledAppFlow.from_client_secrets_file(creds_file, self.scopes)
-                creds = flow.run_local_server(port=0, timeout_seconds=120)
 
-        # Save the credentials for the next run
-        with open(token_file, 'w') as token:
-            token.write(creds.to_json())
+            if self._download_secret_file(secret_file):
+                # save to storage
+                self.handler_storage.folder_sync('config')
+            else:
+                raise ValueError('No valid Gmail Credentials filepath or S3 url found.')
+
+            creds = google_auth_flow(secret_file, self.scopes, self.connection_args.get('code'))
+
+            save_creds_to_file(creds, creds_file)
+            self.handler_storage.folder_sync('config')
 
         return build('gmail', 'v1', credentials=creds)
 
-    def connect(self) -> object:
+    def connect(self):
         """Authenticate with the Gmail API using the credentials file.
 
         Returns
@@ -273,10 +369,7 @@ class GmailHandler(APIHandler):
         if self.is_connected and self.service is not None:
             return self.service
 
-        try:
-            self.service = self.create_connection()
-        except Exception as e:
-            raise Exception(f'Error connecting to Gmail API: {e}')
+        self.service = self.create_connection()
 
         self.is_connected = True
         return self.service
@@ -299,9 +392,15 @@ class GmailHandler(APIHandler):
 
             if result and result.get('emailAddress', None) is not None:
                 response.success = True
+                response.copy_storage = True
+        except AuthException as error:
+            response.error_message = str(error)
+            response.redirect_url = error.auth_url
+            return response
+
         except HttpError as error:
             response.error_message = f'Error connecting to Gmail api: {error}.'
-            log.logger.error(response.error_message)
+            logger.error(response.error_message)
 
         if response.success is False and self.is_connected is True:
             self.is_connected = False
@@ -315,7 +414,7 @@ class GmailHandler(APIHandler):
 
     def _parse_parts(self, parts, attachments):
         if not parts:
-            return
+            return ''
 
         body = ''
         for part in parts:
@@ -333,13 +432,13 @@ class GmailHandler(APIHandler):
                     'attachmentId': part['body']['attachmentId']
                 })
             else:
-                log.logger.debug(f"Unhandled mimeType: {part['mimeType']}")
+                logger.debug(f"Unhandled mimeType: {part['mimeType']}")
 
         return body
 
     def _parse_message(self, data, message, exception):
         if exception:
-            log.logger.error(f'Exception in getting full email: {exception}')
+            logger.error(f'Exception in getting full email: {exception}')
             return
 
         payload = message['payload']
@@ -379,6 +478,21 @@ class GmailHandler(APIHandler):
 
         batch_req.execute()
 
+    def get_attachments(self, result):
+        for index, email in result.iterrows():
+            attachments = json.loads(email['attachments'])
+            for attachment in attachments:
+                attachment_id = attachment['attachmentId']
+                filename = attachment['filename']
+                mimeType = attachment['mimeType']
+                attachment_data = self.service.users().messages().attachments().get(
+                    userId='me', messageId=email['id'], id=attachment_id).execute()
+                file_data = attachment_data['data']
+                file_data = file_data.replace('-', '+').replace('_', '/')
+                file_data = urlsafe_b64decode(file_data)
+                with open(filename, 'wb') as f:
+                    f.write(file_data)
+
     def _handle_list_messages_response(self, data, messages):
         total_pages = len(messages) // self.max_batch_size
         for page in range(total_pages):
@@ -401,6 +515,10 @@ class GmailHandler(APIHandler):
             method = service.users().messages().list
         elif method_name == 'send_message':
             method = service.users().messages().send
+        elif method_name == "delete_message":
+            method = service.users().messages().trash
+        elif method_name == 'update_message':
+            method = service.users().messages().modify
         else:
             raise NotImplementedError(f'Unknown method_name: {method_name}')
 
@@ -432,7 +550,7 @@ class GmailHandler(APIHandler):
                 else:
                     params['maxResults'] = left
 
-            log.logger.debug(f'Calling Gmail API: {method_name} with params ({params})')
+            logger.debug(f'Calling Gmail API: {method_name} with params ({params})')
 
             resp = method(**params).execute()
 
@@ -449,3 +567,27 @@ class GmailHandler(APIHandler):
         df = pd.DataFrame(data)
 
         return df
+
+
+connection_args = OrderedDict(
+    credentials_url={
+        'type': ARG_TYPE.STR,
+        'description': 'URL to Service Account Keys',
+        'label': 'URL to Service Account Keys',
+    },
+    credentials_file={
+        'type': ARG_TYPE.STR,
+        'description': 'Location of Service Account Keys',
+        'label': 'path of Service Account Keys',
+    },
+    credentials={
+        'type': ARG_TYPE.PATH,
+        'description': 'Service Account Keys',
+        'label': 'Upload Service Account Keys',
+    },
+    code={
+        'type': ARG_TYPE.STR,
+        'description': 'code after authorisation',
+        'label': 'code after authorisation',
+    },
+)

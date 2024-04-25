@@ -15,6 +15,7 @@ from mindsdb.integrations.libs.const import HANDLER_CONNECTION_ARG_TYPE as ARG_T
 from mindsdb.integrations.handlers.mysql_handler.mysql_handler import MySQLHandler
 from mindsdb.integrations.handlers.postgres_handler.postgres_handler import PostgresHandler
 
+logger = log.getLogger(__name__)
 
 class AuroraHandler(DatabaseHandler):
     """
@@ -67,8 +68,8 @@ class AuroraHandler(DatabaseHandler):
 
             return next(item for item in response if item["DBClusterIdentifier"] == self.connection_data['host'].split('.')[0])['Engine']
         except Exception as e:
-            log.logger.error(f'Error connecting to Aurora, {e}!')
-            log.logger.error('If the database engine is not provided as a parameter, please ensure that the credentials for the AWS account are passed in instead!')
+            logger.error(f'Error connecting to Aurora, {e}!')
+            logger.error('If the database engine is not provided as a parameter, please ensure that the credentials for the AWS account are passed in instead!')
 
     def __del__(self):
         self.db.__del__()
@@ -157,7 +158,7 @@ connection_args = OrderedDict(
     },
     host={
         'type': ARG_TYPE.STR,
-        'description': 'The host name or IP address of the Amazon Aurora DB cluster. NOTE: use \'127.0.0.1\' instead of \'localhost\' to connect to local server.'
+        'description': 'The host name or IP address of the Amazon Aurora DB cluster.'
     },
     port={
         'type': ARG_TYPE.INT,
